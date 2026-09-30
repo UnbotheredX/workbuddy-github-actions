@@ -1,0 +1,64 @@
+name: WorkBuddy 每日签到
+
+on:
+  schedule:
+    # GitHub Actions 的 cron 一律按 UTC 解释，北京时间 = UTC+8。
+    # 下面两条对应北京时间 07:35 与 13:05。
+    # 每天跑两次的原因：旅行（派猫猫）派遣后要等 1-4 小时才会「到达」，
+    # 一次执行只能覆盖「派遣」或「领取」中的一个，所以用两次错开的执行补齐闭环。
+    # 签到本身幂等，重复执行无副作用（第二次会返回 already_checked）。
+    - cron: "35 23 * * *"   # 北京时间 07:35 —— 签到 + 派遣
+    - cron: "5 5 * * *"     # 北京时间 13:05 —— 签到（幂等）+ 领取
+  workflow_dispatch:        # 手动触发，用于首次验证
+
+# 同一时间只跑一个，避免两次调度重叠导致重复派遣
+concurrency:
+  group: workbuddy-checkin
+  cancel-in-progress: false
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 验证登录态是否已配置
+        env:
+          WORKBUDDY_AUTH_JSON: ${{ secrets.WORKBUDDY_AUTH_JSON }}
+        run: |
+          if [ -z "$WORKBUDDY_AUTH_JSON" ]; then
+            echo "::error::未配置 Secret WORKBUDDY_AUTH_JSON。请在仓库 Settings -> Secrets and variables -> Actions 中添加。"
+            exit 1
+          fi
+          echo "Secret 已配置（长度 ${#WORKBUDDY_AUTH_JSON} 字符，不展示内容）"
+
+      - name: 执行签到 + 旅行
+        env:
+          WORKBUDDY_AUTH_JSON: ${{ secrets.WORKBUDDY_AUTH_JSON }}
+          TZ: Asia/Shanghai
+        run: python scripts/main.py all
+
+      # 结果汇总写进 Job Summary，跑完直接在 Actions 页面看，不用翻日志
+      - name: 写入运行摘要
+        if: always()
+        env:
+          WORKBUDDY_AUTH_JSON: ${{ secrets.WORKBUDDY_AUTH_JSON }}
+          TZ: Asia/Shanghai
+        run: |
+          echo "## WorkBuddy 签到结果" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- 执行时间（北京时间）：$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          python scripts/main.py status >> $GITHUB_STEP_SUMMARY 2>&1 || true
+          echo '```' >> $GITHUB_STEP_SUMMARY

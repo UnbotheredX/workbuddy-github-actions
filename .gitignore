@@ -1,0 +1,23 @@
+# ===== 凭据相关，绝对不要提交 =====
+secrets.json
+secrets.yml
+secrets*.json
+*_auth.json
+.env
+.env.*
+
+# ===== 运行产物 =====
+logs/
+*.log
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ===== 编辑器 / 系统 =====
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
