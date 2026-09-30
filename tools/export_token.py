@@ -27,46 +27,121 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
 
-def _read_raw_desktop_info() -> tuple[str, dict] | tuple[None, None]:
-    """读取本机 workbuddy-desktop.info 原文。"""
+def _candidate_paths() -> list[str]:
+    """登录态文件候选路径。
+
+    Windows 注意：实测该文件位于 %LOCALAPPDATA%，而非 %APPDATA%（Roaming）。
+    两者都试，Local 优先。
+    """
     rel = os.path.join(
         "CodeBuddyExtension", "Data", "Public", "auth", "workbuddy-desktop.info"
     )
     home = os.path.expanduser("~")
     if sys.platform == "darwin":
-        path = os.path.join(home, "Library", "Application Support", rel)
-    elif sys.platform == "win32":
-        path = os.path.join(os.environ.get("APPDATA", ""), rel)
-    else:
-        path = os.path.join(
-            os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config")), rel
-        )
+        return [os.path.join(home, "Library", "Application Support", rel)]
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local")
+        roaming = os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
+        return [os.path.join(local, rel), os.path.join(roaming, rel)]
+    return [os.path.join(
+        os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config")), rel
+    )]
 
-    if not os.path.isfile(path):
-        return None, None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return path, json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        print("[FAIL] 无法读取登录态文件：{}：{}".format(path, e))
-        return None, None
+
+def _read_raw_desktop_info() -> tuple[str, dict] | tuple[None, None]:
+    """读取本机 workbuddy-desktop.info 原文，返回 (路径, 解析结果)。"""
+    tried = []
+    for path in _candidate_paths():
+        tried.append(path)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                return path, json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print("[WARN] 读取失败，尝试下一个候选：{}：{}".format(path, e))
+            continue
+    print("[INFO] 已检查以下路径，均未命中：")
+    for p in tried:
+        print("       " + p)
+    return None, None
+
+
+def _find_workbuddy_exe() -> str | None:
+    """定位 WorkBuddy.exe。
+
+    优先级：环境变量 WORKBUDDY_EXE > 标准安装路径 > 查询运行中的进程。
+
+    实测有机器装在非标准路径（如 E:\\work\\Workbuddy\\install\\WorkBuddy.exe），
+    标准路径发现会失败，因此增加「查询运行中进程」作为兜底。
+    """
+    env_exe = os.environ.get("WORKBUDDY_EXE", "")
+    if env_exe and os.path.isfile(env_exe):
+        return env_exe
+
+    home = os.path.expanduser("~")
+    roots = [
+        os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local"),
+        os.environ.get("ProgramFiles", ""),
+        os.environ.get("ProgramFiles(x86)", ""),
+    ]
+    candidates = []
+    for root in roots:
+        if root:
+            candidates.append(os.path.join(root, "Programs", "WorkBuddy", "WorkBuddy.exe"))
+            candidates.append(os.path.join(root, "WorkBuddy", "WorkBuddy.exe"))
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+
+    # 兜底：查运行中的进程（可覆盖自定义安装目录）
+    if sys.platform == "win32":
+        try:
+            out = subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                    "(Get-Process WorkBuddy -ErrorAction SilentlyContinue | "
+                    "Where-Object { $_.Path } | Select-Object -First 1 "
+                    "-ExpandProperty Path)",
+                ],
+                capture_output=True, text=True, timeout=25,
+            )
+            for line in (out.stdout or "").splitlines():
+                p = line.strip()
+                if p.lower().endswith(".exe") and os.path.isfile(p):
+                    return p
+        except Exception:
+            pass
+    return None
 
 
 def _decrypt_via_runtime(envelope: dict) -> str | None:
-    """尝试通过 WorkBuddy 客户端本地运行时解密 $wbEncrypted 信封。
+    """通过 WorkBuddy 客户端本地运行时解密 $wbEncrypted 信封。
 
-    这是可选的增强路径：如果本机有 WorkBuddy 的 Node/Electron 运行时，
-    可以直接调用它解密；否则提示用户用官方客户端能力或明文回退。
+    解密密钥（atRestSecretKey）只存在于运行中的客户端进程内存里，所以这一步
+    必须在本机、且客户端正在运行时执行。
     """
     try:
         import wb_runtime
     except ImportError:
+        print("[WARN] 未找到 wb_runtime 模块，跳过运行时解密。")
         return None
+
+    exe = _find_workbuddy_exe()
+    if not exe:
+        print("[WARN] 未定位到 WorkBuddy.exe。")
+        print("       请用环境变量显式指定后重试，例如：")
+        print('         set WORKBUDDY_EXE=E:\\path\\to\\WorkBuddy.exe')
+        return None
+    os.environ["WORKBUDDY_EXE"] = exe
+    print("[INFO] 使用客户端运行时：{}".format(exe))
+
     try:
         return wb_runtime.decrypt_token(envelope)
     except Exception as e:

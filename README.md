@@ -192,6 +192,8 @@ python tools/export_token.py
 | 日志报「不是合法 JSON」/「疑似被截断」 | 粘贴不完整。删掉旧 Secret，重新导出整份覆盖 |
 | 报「检测到加密态 accessToken（$wbEncrypted）」 | Secret 里存的是加密信封。本机重新运行 `export_token.py` 导出**明文** |
 | 报「无法解密」 | 客户端没运行/没登录。**必须先打开并登录 WorkBuddy 桌面端**，再执行导出 |
+| 报「未定位到 WorkBuddy.exe」 | 客户端装在非标准目录（如 `E:\work\Workbuddy\install\`），脚本按标准路径找不到。脚本会兜底查询运行中进程；若仍失败，显式指定：`set WORKBUDDY_EXE=E:\path\to\WorkBuddy.exe` |
+| 报「已检查以下路径，均未命中」 | 登录态文件不在预期位置。实测在 `%LOCALAPPDATA%\CodeBuddyExtension\...`，脚本已同时尝试 Local 与 Roaming |
 | 报 401 | token 过期。重新导出并更新 Secret |
 | 旅行返回 `failed` + code/msg | Buddy 旅行属成长中心活动接口，**活动改版/下线时会失效**，属预期行为；签到不受影响 |
 | 签到返回 `already_checked` | 正常，今日已领过（幂等保护） |

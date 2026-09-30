@@ -99,6 +99,11 @@ def _from_env_token() -> dict | None:
 
 
 def _desktop_info_candidates() -> list[str]:
+    """登录态文件候选路径（按平台）。
+
+    Windows 注意：实测该文件位于 %LOCALAPPDATA%，而非 %APPDATA%（Roaming）。
+    为兼容不同客户端版本，两者都试——Local 优先。
+    """
     rel = os.path.join(
         "CodeBuddyExtension", "Data", "Public", "auth", "workbuddy-desktop.info"
     )
@@ -106,7 +111,9 @@ def _desktop_info_candidates() -> list[str]:
     if sys.platform == "darwin":
         return [os.path.join(home, "Library", "Application Support", rel)]
     if sys.platform == "win32":
-        return [os.path.join(os.environ.get("APPDATA", ""), rel)]
+        local = os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local")
+        roaming = os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
+        return [os.path.join(local, rel), os.path.join(roaming, rel)]
     return [os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config")), rel)]
 
 
